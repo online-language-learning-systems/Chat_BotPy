@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     #Server
     HOST: str = "0.0.0.0"
-    PORT: int = 5000
+    PORT: int = 5001
     #Database
     MONGODB_URI : str
     # AI_Provider
@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     KEYCLOAK_ISSUER_URI: str = KEYCLOAK_ISSUER_URI
     KEYCLOAK_CLIENT_ID: str = KEYCLOAK_CLIENT_ID
     JWKS_URL: Optional[str] = JWKS_URL
+    # External services
+    COURSE_SERVICE_BASE_URL: str = os.getenv("COURSE_SERVICE_BASE_URL", "http://course-service/storefront/courses")
     class Config:
         env_file = ".env"
         case_sensitive = True

@@ -2,8 +2,6 @@
 from app.controllers.conversation_controller import ConversationController
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.ai.ai_factory import create_service
-from app.services.scoring_service import ScoringService
-from app.services.recommendation_service import RecommendationService
 from app.utils.decorators import handle_errors, validate_json, require_auth
 from app.auth.jwt_auth import require_roles
 from app.schemas.conversation_schema import (
@@ -11,6 +9,7 @@ from app.schemas.conversation_schema import (
     MessageSendSchema,
 )
 from app import mongo
+from app.config import settings
 
 
 bp = Blueprint('conversations', __name__)
@@ -20,13 +19,10 @@ def _get_controller() -> ConversationController:
     # Access mongo.db within app/request context
     conversation_repo = ConversationRepository(mongo.db.conversations)
     ai_service = create_service()
-    scoring_service = ScoringService()
-    recommendation_service = RecommendationService()
     return ConversationController(
         conversation_repo=conversation_repo,
         ai_service=ai_service,
-        scoring_service=scoring_service,
-        recommendation_service=recommendation_service,
+        course_service_base_url=settings.COURSE_SERVICE_BASE_URL,
     )
 
 
@@ -36,7 +32,7 @@ message_schema = MessageSendSchema()
 
 @bp.route('', methods=['POST'])
 @handle_errors
-@require_auth  # <-- Thêm xác thực ở đây
+# @require_auth  # <-- Thêm xác thực ở đây
 @validate_json(create_schema)
 def create_conversation():
     """
@@ -79,7 +75,7 @@ def create_conversation():
 
 @bp.route('/<conversation_id>', methods=['GET'])
 @handle_errors
-@require_auth  # <-- Thêm xác thực
+# @require_auth  # <-- Thêm xác thực
 def get_conversation(conversation_id: str):
     """
     Get conversation by ID
@@ -106,7 +102,7 @@ def get_conversation(conversation_id: str):
 
 @bp.route('/<conversation_id>/messages', methods=['POST'])
 @handle_errors
-@require_auth  # <-- Thêm xác thực
+# @require_auth  # <-- Thêm xác thực
 @validate_json(message_schema)
 def send_message(conversation_id: str):
     """
@@ -142,17 +138,20 @@ def send_message(conversation_id: str):
     """
     data = request.get_json()
     controller = _get_controller()
-    result = controller.send_message(
-        conversation_id=conversation_id,
-        message_content=data['message'],
-        response_time=data.get('response_time')
-    )
-    return jsonify(result)
+    try:
+        result = controller.send_message(
+            conversation_id=conversation_id,
+            message_content=data['message'],
+            response_time=data.get('response_time')
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
 
 @bp.route('/<conversation_id>/recommendations', methods=['GET'])
 @handle_errors
-@require_auth  # <-- Thêm xác thực
+# @require_auth  # <-- Thêm xác thực
 def get_recommendations(conversation_id: str):
     """
     Get course recommendations for a conversation
@@ -171,13 +170,16 @@ def get_recommendations(conversation_id: str):
         description: Not found
     """
     controller = _get_controller()
-    recommendations = controller.get_recommendations(conversation_id)
-    return jsonify(recommendations)
+    try:
+        recommendations = controller.get_recommendations_by_jlpt(conversation_id)
+        return jsonify(recommendations)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
 
 
 @bp.route('/users/<user_id>', methods=['GET'])
 @handle_errors
-@require_auth  # <-- Thêm xác thực
+# @require_auth  # <-- Thêm xác thực
 def get_user_conversations(user_id: str):
     """
     List conversations by user
@@ -210,7 +212,7 @@ def get_user_conversations(user_id: str):
 
 @bp.route('/users/<user_id>/statistics', methods=['GET'])
 @handle_errors
-@require_auth  # <-- Thêm xác thực
+# @require_auth  # <-- Thêm xác thực
 def get_user_statistics(user_id: str):
     """
     Get conversation statistics for a user

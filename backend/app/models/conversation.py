@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any  # Định kiểu cho biến, hàm
 from bson import ObjectId  # Lớp ObjectId đặc biệt dùng cho ID trong MongoDB
 
 from .base import BaseModel, Entity  # Import lớp cơ sở (Entity có thể chứa các thuộc tính như _id, created_at,...)
+from .enums import ConversationMode  # Import enum cho conversation mode
 
 
 @dataclass
@@ -15,6 +16,17 @@ class MessageAnalysis:
     vocabulary: Dict[str, Any]  # Phân tích về từ vựng
     naturalness: Dict[str, Any]  # Độ tự nhiên khi nói
     response_time: Optional[int] = None  # Thời gian phản hồi tính bằng giây, có thể không có (None)
+    # Enhanced fields for Core AI
+    grammar_errors: Optional[List[str]] = None  # Danh sách lỗi ngữ pháp
+    particle_errors: Optional[List[str]] = None  # Danh sách lỗi trợ từ
+    keigo_score: Optional[float] = None  # Điểm kính ngữ (nếu có)
+    jlpt_estimation: Optional[str] = None  # Ước lượng JLPT level
+
+    def __post_init__(self):
+        if self.grammar_errors is None:
+            self.grammar_errors = []
+        if self.particle_errors is None:
+            self.particle_errors = []
 
     def to_dict(self) -> dict:
         # Chuyển đổi đối tượng thành dict để lưu database hoặc trả về API
@@ -23,6 +35,10 @@ class MessageAnalysis:
             'vocabulary': self.vocabulary,
             'naturalness': self.naturalness,
             'response_time': self.response_time,
+            'grammar_errors': self.grammar_errors,
+            'particle_errors': self.particle_errors,
+            'keigo_score': self.keigo_score,
+            'jlpt_estimation': self.jlpt_estimation,
         }
 
     @staticmethod
@@ -36,6 +52,10 @@ class MessageAnalysis:
             vocabulary=data.get('vocabulary', {}),  # Tương tự với 'vocabulary'
             naturalness=data.get('naturalness', {}),  # Và 'naturalness'
             response_time=data.get('response_time'),  # Lấy response_time, có thể None
+            grammar_errors=data.get('grammar_errors', []) or [],  # Lỗi ngữ pháp
+            particle_errors=data.get('particle_errors', []) or [],  # Lỗi trợ từ
+            keigo_score=data.get('keigo_score'),  # Điểm kính ngữ
+            jlpt_estimation=data.get('jlpt_estimation'),  # Ước lượng JLPT
         )
 
 
@@ -159,6 +179,12 @@ class Conversation(Entity):
         messages: Optional[List[Message]] = None,  # Danh sách tin nhắn (có thể trống)
         overall_score: Optional[Score] = None,  # Điểm tổng thể cho cuộc hội thoại
         recommendations: Optional[List[Recommendation]] = None,  # Danh sách đề xuất liên quan
+        # Enhanced fields for Core AI
+        conversation_mode: Optional[str] = None,  # Chế độ hội thoại (speaking_practice, role_play, etc.)
+        language: str = "ja",  # Ngôn ngữ (mặc định tiếng Nhật)
+        jlpt_target: Optional[str] = None,  # JLPT mục tiêu (alias for level)
+        summary: Optional[str] = None,  # Tóm tắt cuộc hội thoại
+        jlpt_estimation: Optional[str] = None,  # JLPT ước lượng sau đánh giá
     ):
         super().__init__()
         self.user_id = user_id
@@ -167,6 +193,12 @@ class Conversation(Entity):
         self.messages: List[Message] = messages or []  # Nếu không có messages thì khởi tạo danh sách rỗng
         self.overall_score: Score = overall_score or Score()  # Nếu không có điểm thì tạo Score mặc định (0)
         self.recommendations: List[Recommendation] = recommendations or []  # Nếu không có thì danh sách rỗng
+        # Enhanced fields
+        self.conversation_mode = conversation_mode or ConversationMode.SPEAKING_PRACTICE.value
+        self.language = language
+        self.jlpt_target = jlpt_target or level  # Default to level if not provided
+        self.summary = summary
+        self.jlpt_estimation = jlpt_estimation
 
     def add_message(self, message: Message) -> None:
         # Thêm tin nhắn mới vào cuộc hội thoại
@@ -201,6 +233,12 @@ class Conversation(Entity):
             'overall_score': self.overall_score.to_dict() if self.overall_score else None,
             # Chuyển danh sách đề xuất thành list dict
             'recommendations': [r.to_dict() for r in self.recommendations],
+            # Enhanced fields
+            'conversation_mode': self.conversation_mode,
+            'language': self.language,
+            'jlpt_target': self.jlpt_target,
+            'summary': self.summary,
+            'jlpt_estimation': self.jlpt_estimation,
         })
         return base
 
@@ -217,6 +255,12 @@ class Conversation(Entity):
             overall_score=Score.from_dict(data.get('overall_score')),
             # Tạo list Recommendation từ dict
             recommendations=[Recommendation.from_dict(d) for d in data.get('recommendations', [])],
+            # Enhanced fields
+            conversation_mode=data.get('conversation_mode'),
+            language=data.get('language', 'ja'),
+            jlpt_target=data.get('jlpt_target') or data.get('level', ''),
+            summary=data.get('summary'),
+            jlpt_estimation=data.get('jlpt_estimation'),
         )
         # Xử lý trường _id (ObjectId của MongoDB)
         if data.get('_id'):

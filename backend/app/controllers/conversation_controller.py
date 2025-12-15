@@ -5,11 +5,10 @@ Logic nghiệp vụ được tách ra service riêng biệt
 """
 from typing import Optional
 from datetime import datetime
-from app.models.conversation import Conversation, Message, MessageAnalysis
+from app.models.conversation import Conversation, Message
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.ai.base_ai_service import IAIService
-from app.services.scoring_service import ScoringService
-from app.services.recommendation_service import RecommendationService
+import requests
 
 
 class ConversationController:
@@ -22,16 +21,12 @@ class ConversationController:
     def __init__(
             self,
             conversation_repo: ConversationRepository,
-            
             ai_service: IAIService,
-            scoring_service: ScoringService,
-            recommendation_service: RecommendationService
+            course_service_base_url: str,
     ):
         self.conversation_repo = conversation_repo
-    
         self.ai_service = ai_service
-        self.scoring_service = scoring_service
-        self.recommendation_service = recommendation_service
+        self.course_service_base_url = course_service_base_url.rstrip('/')
 
     def create_conversation(
             self,
@@ -84,25 +79,15 @@ class ConversationController:
         conversation = self.conversation_repo.find_by_id(conversation_id)
         if not conversation:
             raise ValueError(f"Conversation {conversation_id} not found")
-
-        # Gọi service để phân tích tin nhắn người dùng
-        analysis_data = self.ai_service.analyze_message(
-            message_content,
-            conversation.level
-        )
-        analysis = MessageAnalysis(
-            grammar=analysis_data['grammar'],
-            vocabulary=analysis_data['vocabulary'],
-            naturalness=analysis_data['naturalness'],
-            response_time=response_time
-        )
+        if conversation.language != "ja":
+            raise ValueError("Language not supported yet")
 
         # Tạo Message user
         user_message = Message(
             role='user',
             content=message_content,
             timestamp=datetime.utcnow(),
-            analysis=analysis
+            analysis=None,
         )
 
         # Thêm message user vào conversation
@@ -125,13 +110,6 @@ class ConversationController:
         # Thêm message AI vào conversation
         conversation.add_message(ai_message)
 
-        # Tính điểm tổng thể bằng scoring service
-        new_score = self.scoring_service.calculate_overall_score(
-            conversation.messages
-        )
-        # Cập nhật điểm tổng thể vào conversation
-        conversation.update_score(new_score)
-
         # Lưu conversation đã cập nhật
         self.conversation_repo.update(conversation_id, conversation)
 
@@ -139,7 +117,7 @@ class ConversationController:
         return {
             'user_message': user_message.to_dict(),
             'ai_message': ai_message.to_dict(),
-            'overall_score': new_score.to_dict()
+            'overall_score': conversation.overall_score.to_dict()
         }
 
     def get_conversation(self, conversation_id: str) -> Optional[Conversation]:
@@ -159,44 +137,6 @@ class ConversationController:
         """
         return self.conversation_repo.find_by_user_id(user_id, skip, limit)
 
-    def get_recommendations(self, conversation_id: str) -> list[dict]:
-        """
-        Lấy danh sách đề xuất khóa học dựa trên conversation
-
-        Args:
-            conversation_id: id conversation
-
-        Returns:
-            List dict đề xuất kèm thông tin chi tiết khóa học
-        """
-        conversation = self.conversation_repo.find_by_id(conversation_id)
-        if not conversation:
-            raise ValueError(f"Conversation {conversation_id} not found")
-
-        # Lấy danh sách khóa học theo trình độ
-        courses = self.course_repo.find_by_level(conversation.level)
-
-        # Gọi recommendation service để tạo danh sách đề xuất
-        recommendations = self.recommendation_service.generate_recommendations(
-            conversation,
-            courses
-        )
-
-        # Thêm đề xuất vào conversation và lưu
-        conversation.add_recommendations(recommendations)
-        self.conversation_repo.update(conversation_id, conversation)
-
-        # Lấy chi tiết khóa học cho từng đề xuất
-        detailed_recommendations = []
-        for rec in recommendations:
-            course = self.course_repo.find_by_id(rec.course_id)
-            detailed_recommendations.append({
-                **rec.to_dict(),
-                'course': course.to_dict() if course else None
-            })
-
-        return detailed_recommendations
-
     def get_user_statistics(self, user_id: str) -> dict:
         """
         Lấy thống kê các cuộc hội thoại của người dùng
@@ -208,3 +148,45 @@ class ConversationController:
             Dict thống kê (tổng số conversation, điểm cuối cùng,...)
         """
         return self.conversation_repo.get_user_statistics(user_id)
+
+    def _map_jlpt_to_category(self, jlpt_target: str) -> Optional[int]:
+        mapping = {
+            "N1": 1,
+            "N2": 2,
+            "N3": 3,
+            "N4": 4,
+            "N5": 5,
+        }
+        return mapping.get(jlpt_target)
+
+    def get_recommendations_by_jlpt(self, conversation_id: str) -> list[dict]:
+        conversation = self.conversation_repo.find_by_id(conversation_id)
+        if not conversation:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        category_id = self._map_jlpt_to_category(conversation.jlpt_target or conversation.level)
+        if not category_id:
+            return []
+
+        try:
+            resp = requests.get(
+                self.course_service_base_url,
+                params={"categoryId": category_id},
+                timeout=5,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            return []
+
+        courses = payload if isinstance(payload, list) else payload.get("data", [])
+
+        recs = []
+        for course in courses:
+            recs.append({
+                "type": "jlpt_course",
+                "course_id": str(course.get("id", "")),
+                "title": course.get("title") or course.get("name"),
+                "category_id": category_id,
+                "reason": f"Recommended for JLPT {conversation.jlpt_target or conversation.level}"
+            })
+        return recs
